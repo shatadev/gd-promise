@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://kaijpraxc0r7"]
+
+[ext_resource type="Script" uid="uid://bi4nlwixchi7p" path="res://examples/promise_example.gd" id="1_rou80"]
+
+[node name="PromiseExample" type="Node" unique_id=884982532]
+script = ExtResource("1_rou80")
