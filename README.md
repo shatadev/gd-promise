@@ -223,8 +223,7 @@ treat those as bugs.
 
 - **Executor errors are not caught.** Without try/catch, a script error
   inside an executor or handler is a real error and leaves the promise
-  permanently PENDING — it cannot be converted into a rejection the way
-  JS/Lua implementations do. Validate inputs; reject explicitly.
+  permanently PENDING — unless `assert` is used, which always halts execution. Use `assert` to manually trigger errors.
 - **`from_signal` supports at most one signal argument.** Emitting a 2+
   argument signal into it is a script error. Pack values into a Dictionary,
   or use a wrapper signal.
