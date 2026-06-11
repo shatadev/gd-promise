@@ -1,7 +1,7 @@
 # test_promise.gd
 # GUT (9.x / Godot 4) unit tests for GD Promise addon
 #
-# Add to your GUT test directories: e.g. res://addons/gd-promise/test/unit/
+# Add to your GUT test directories: e.g. res://test/unit/
 #
 # Notes:
 # - No test triggers a hard engine error. Rejections are always handled
