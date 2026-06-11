@@ -5,9 +5,31 @@
 # Design note – single-value contract:
 #   Internally, _value holds exactly ONE Variant (the resolved value or rejection
 #   reason).  User callbacks always receive/return that single value directly.
-#   This avoids all Array-packing/callv mismatches that plague multi-value designs
-#   in GDScript. If you need to pass multiple values, wrap them in a Dictionary
-#   or Array yourself.
+#   If you need to pass multiple values, wrap them in a Dictionary or Array.
+#
+# Cancellation model (see
+# https://eryn.io/roblox-lua-promise/api/Promise#cancel):
+#   * cancel() propagates DOWNWARDS: cancelling a promise cancels every
+#     pending promise chained from it via and_then/catch/tap.
+#   * cancel() propagates UPWARDS: a promise is cancelled when ALL of its
+#     consumers are cancelled. Chaining and_then twice and cancelling only one
+#     child leaves the parent (and the other child) alive.
+#   * finally_cb does NOT count as a consumer, but cancellation still flows
+#     through it in both directions, and its handler runs on cancellation.
+#   * Resolving a promise WITH another promise (adoption) also wires
+#     cancellation through to the adopted promise.
+#   * all / some / any / race cancel the remaining input promises when they
+#     settle — but only inputs that have no other consumers, courtesy of the
+#     upward-propagation rule. timeout() therefore cancels the source promise
+#     when the timeout is reached. all_settled never cancels inputs.
+#   * NOTE: awaiting (await_status & friends) does NOT register a consumer.
+#     A promise that is only awaited can still be cancelled out from under
+#     the awaiter, which then resumes with Status.CANCELLED.
+#   * Lifetime note: a pending parent and its pending children reference each
+#     other (_parent/_consumers). The links are severed in _finalize(), so the
+#     cycle only exists while both are pending — which is exactly when it is
+#     needed. A chain that NEVER settles or cancels will leak; settle or
+#     cancel your promises.
 #
 # Usage:
 #   var p = Promise.new_promise(func(resolve, reject, on_cancel):
@@ -20,11 +42,11 @@ extends RefCounted
 # ---------------------------------------------------------------------------
 # Status enum
 # ---------------------------------------------------------------------------
-enum Status { 
-	PENDING, 
-	RESOLVED, 
-	REJECTED, 
-	CANCELLED 
+enum Status {
+	PENDING,
+	RESOLVED,
+	REJECTED,
+	CANCELLED
 }
 
 # ---------------------------------------------------------------------------
@@ -37,7 +59,7 @@ var _queued_reject      : Array    = []     # Array[Callable(reason)]
 var _queued_finally     : Array    = []     # Array[Callable(Status)]
 var _cancellation_hook  : Callable          # called if/when cancelled
 var _parent             : Promise  = null   # upstream (for cancel propagation)
-var _consumers          : Array    = []     # downstream promises
+var _consumers          : Array    = []     # downstream and_then children (NOT finally)
 var _unhandled_rejection: bool     = true
 signal _settled                             # emitted once when status leaves PENDING
 
@@ -46,12 +68,14 @@ signal _settled                             # emitted once when status leaves PE
 # ---------------------------------------------------------------------------
 
 ## Primary constructor. executor: func(resolve, reject, on_cancel).
+## The executor may declare fewer parameters; extras are simply not passed.
 static func new_promise(executor: Callable) -> Promise:
 	var p := Promise.new()
 	p._run_executor(executor)
 	return p
 
 ## Returns an already-resolved Promise carrying `value`.
+## If `value` is a Promise, it is chained onto (adopted).
 static func resolve(value: Variant = null) -> Promise:
 	var p := Promise.new()
 	p._settle_resolve(value)
@@ -64,25 +88,22 @@ static func reject(reason: Variant = null) -> Promise:
 	return p
 
 ## Deferred constructor – executor runs on the next process frame.
+## If the promise is cancelled before that frame, the executor never runs.
 static func defer(executor: Callable) -> Promise:
 	var p := Promise.new()
 	Engine.get_main_loop().process_frame.connect(
-		func(): p._run_executor(executor),
+		func():
+			if p._status == Status.PENDING:
+				p._run_executor(executor),
 		CONNECT_ONE_SHOT
 	)
 	return p
 
 ## Calls callback immediately, wrapping its return value in a resolved Promise.
+## If the callback returns a Promise, it is adopted.
 static func try_call(callback: Callable, args: Array = []) -> Promise:
 	var p := Promise.new()
-	var result: Variant = callback.callv(args)
-	if result is Promise:
-		(result as Promise).and_then(
-			func(v): p._settle_resolve(v),
-			func(r): p._settle_reject(r)
-		)
-	else:
-		p._settle_resolve(result)
+	p._settle_resolve(callback.callv(args))
 	return p
 
 ## Returns a Callable that, when called with (args: Array), returns a Promise.
@@ -95,18 +116,24 @@ static func promisify(callback: Callable) -> Callable:
 # ---------------------------------------------------------------------------
 
 ## Resolves with an Array of values once ALL promises resolve.
-## Rejects immediately on the first rejection.
+## Rejects immediately on the first rejection; remaining pending inputs are
+## then cancelled if they have no other consumers.
 static func all(promises: Array) -> Promise:
 	if promises.is_empty():
 		return Promise.resolve([])
-	return Promise.new_promise(func(res: Callable, rej: Callable, _oc: Callable):
+	return Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
 		var results := []
 		results.resize(promises.size())
 		var count := [0]
 		var done  := [false]
+		var children := []
+		var cancel_children := func():
+			for c in children:
+				(c as Promise).cancel()
+		on_cancel.call(cancel_children)
 		for i in promises.size():
 			var idx := i
-			(promises[idx] as Promise).and_then(
+			children.append((promises[idx] as Promise).and_then(
 				func(v):
 					if done[0]: return
 					results[idx] = v
@@ -117,60 +144,92 @@ static func all(promises: Array) -> Promise:
 				func(r):
 					if done[0]: return
 					done[0] = true
+					# Cancel losers BEFORE settling: settling emits _settled,
+					# which resumes awaiters synchronously — they must observe
+					# the propagated cancellations.
+					cancel_children.call()
 					rej.call(r)
-			)
+			))
+		if done[0]:
+			cancel_children.call()
 	)
 
-## Resolves with an Array of the first `count` values to resolve.
-## Rejects if too many promises reject to make `count` impossible.
+## Resolves with an Array of the first `count` values to resolve, in arrival
+## order. Rejects if too many promises reject to make `count` possible.
+## On settle, remaining pending inputs are cancelled if they have no other
+## consumers.
 static func some(promises: Array, count: int) -> Promise:
 	if count == 0:
 		return Promise.resolve([])
-	return Promise.new_promise(func(res: Callable, rej: Callable, _oc: Callable):
+	return Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
 		var results  := []
 		var resolved := [0]
 		var rejected := [0]
 		var done     := [false]
+		var children := []
+		var cancel_children := func():
+			for c in children:
+				(c as Promise).cancel()
+		on_cancel.call(cancel_children)
 		for pr: Promise in promises:
-			pr.and_then(
+			children.append(pr.and_then(
 				func(v):
 					if done[0]: return
 					resolved[0] += 1
 					results.append(v)
 					if resolved[0] >= count:
 						done[0] = true
+						# Cancel before settle (see all() for why).
+						cancel_children.call()
 						res.call(results),
 				func(r):
 					if done[0]: return
 					rejected[0] += 1
 					if promises.size() - rejected[0] < count:
 						done[0] = true
+						cancel_children.call()
 						rej.call(r)
-			)
+			))
+		if done[0]:
+			cancel_children.call()
 	)
 
 ## Resolves with the first value to resolve; rejects only if ALL reject.
+## Losers are cancelled if they have no other consumers (via some()).
 static func any(promises: Array) -> Promise:
 	return Promise.some(promises, 1).and_then(func(arr): return arr[0])
 
 ## Resolves or rejects with whichever promise settles first.
+## Losers are cancelled if they have no other consumers.
 static func race(promises: Array) -> Promise:
-	return Promise.new_promise(func(res: Callable, rej: Callable, _oc: Callable):
+	return Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
 		var done := [false]
+		var children := []
+		var cancel_children := func():
+			for c in children:
+				(c as Promise).cancel()
+		on_cancel.call(cancel_children)
 		for pr: Promise in promises:
-			pr.and_then(
+			children.append(pr.and_then(
 				func(v):
 					if done[0]: return
 					done[0] = true
+					# Cancel before settle (see all() for why).
+					cancel_children.call()
 					res.call(v),
 				func(r):
 					if done[0]: return
 					done[0] = true
+					cancel_children.call()
 					rej.call(r)
-			)
+			))
+		if done[0]:
+			cancel_children.call()
 	)
 
 ## Resolves with an Array of Status values once every promise has settled.
+## Equivalent to mapping finally_cb over the inputs: never cancels them and
+## never consumes them.
 static func all_settled(promises: Array) -> Promise:
 	if promises.is_empty():
 		return Promise.resolve([])
@@ -180,42 +239,81 @@ static func all_settled(promises: Array) -> Promise:
 		var count := [0]
 		for i in promises.size():
 			var idx := i
-			(promises[idx] as Promise).finally_cb(func(status: Status):
+			var f := (promises[idx] as Promise).finally_cb(func(status: Status):
 				fates[idx] = status
 				count[0]  += 1
 				if count[0] >= promises.size():
 					res.call(fates)
 			)
+			# finally_cb passes rejections through; all_settled itself is the
+			# observer, so silence the pass-through child's unhandled warning.
+			f._unhandled_rejection = false
 	)
 
-## Processes each element of `list` serially through `predicate`.
+## Processes each element of `list` serially through `predicate(value, index)`.
 ## Each predicate call may return a Promise or a plain value.
 ## Resolves with an Array of the predicate return values.
+##
+## evaera-aligned behavior:
+##   * An input element that is already CANCELLED rejects each() with an
+##     ALREADY_CANCELLED PromiseError.
+##   * Cancelling the each() promise stops iteration and cancels the
+##     currently-active promise (which propagates to its source if it has no
+##     other consumers). Untouched input promises are left alone.
+##
+## Implementation note: synchronously-settling elements are processed in a
+## loop (trampoline), so list size is NOT limited by the call-stack depth.
 static func each(list: Array, predicate: Callable) -> Promise:
-	return Promise.new_promise(func(res: Callable, rej: Callable, _oc: Callable):
+	return Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
 		var results := []
 		results.resize(list.size())
-		_each_step(list, predicate, results, 0, res, rej)
+		var state := { "cancelled": false, "active": null }
+		on_cancel.call(func():
+			state.cancelled = true
+			if state.active != null:
+				(state.active as Promise).cancel()
+		)
+		_each_step(list, predicate, results, 0, res, rej, state)
 	)
 
 static func _each_step(list: Array, predicate: Callable, results: Array,
-		i: int, res: Callable, rej: Callable) -> void:
-	if i >= list.size():
-		res.call(results)
+		start: int, res: Callable, rej: Callable, state: Dictionary) -> void:
+	var i := start
+	while i < list.size():
+		if state.cancelled:
+			return
+		var element: Variant = list[i]
+		var out: Promise
+		if element is Promise:
+			out = (element as Promise).and_then(func(v): return predicate.call(v, i))
+		else:
+			var r: Variant = predicate.call(element, i)
+			out = r if r is Promise else Promise.resolve(r)
+
+		if out._status == Status.RESOLVED:
+			# Fast path: keep looping instead of recursing (stack-safe).
+			results[i] = out._value
+			i += 1
+			continue
+		if out._status == Status.CANCELLED:
+			rej.call(PromiseError.new("Promise is cancelled",
+					PromiseError.Kind.ALREADY_CANCELLED))
+			return
+		# PENDING (suspend until it settles) or REJECTED (settles the attach
+		# synchronously). Either way, this call frame ends here.
+		var idx := i
+		state.active = out
+		out.and_then(
+			func(v):
+				state.active = null
+				results[idx] = v
+				_each_step(list, predicate, results, idx + 1, res, rej, state),
+			func(r):
+				state.active = null
+				rej.call(r)
+		)
 		return
-	var element: Variant = list[i]
-	var out: Promise
-	if element is Promise:
-		out = (element as Promise).and_then(func(v): return predicate.call(v, i))
-	else:
-		var r: Variant = predicate.call(element, i)
-		out = r if r is Promise else Promise.resolve(r)
-	out.and_then(
-		func(v):
-			results[i] = v
-			_each_step(list, predicate, results, i + 1, res, rej),
-		func(r): rej.call(r)
-	)
+	res.call(results)
 
 ## Reduces `list` to a single value using `reducer(accumulator, element, index)`.
 ## Reducer may return a plain value or a Promise.
@@ -251,11 +349,12 @@ static func retry_with_delay(callback: Callable, times: int,
 	)
 
 ## Resolves after `seconds` seconds with the elapsed time as the value.
+## Cancelling the promise makes the eventual timer fire a no-op (SceneTreeTimer
+## itself cannot be aborted, but the settle is ignored once cancelled).
 static func delay(seconds: float) -> Promise:
-	return Promise.new_promise(func(res: Callable, _rej: Callable, on_cancel: Callable):
+	return Promise.new_promise(func(res: Callable, _rej: Callable, _on_cancel: Callable):
 		var tree  := Engine.get_main_loop() as SceneTree
 		var timer := tree.create_timer(seconds)
-		on_cancel.call(func(): pass)
 		timer.timeout.connect(func(): res.call(seconds), CONNECT_ONE_SHOT)
 	)
 
@@ -263,22 +362,22 @@ static func delay(seconds: float) -> Promise:
 ## The resolved value is the first argument emitted by the signal.
 static func from_signal(sig: Signal, predicate: Callable = Callable()) -> Promise:
 	return Promise.new_promise(func(res: Callable, _rej: Callable, on_cancel: Callable):
-		# We define a helper dictionary to hold the reference to the callable
-		# This bypasses the "capture before assignment" issue
+		# A helper dictionary holds the Callable reference, bypassing the
+		# "capture before assignment" issue.
 		var context := { "conn": Callable() }
-		
+
 		context.conn = func(value: Variant = null):
 			var ok := true
 			if predicate.is_valid():
 				ok = predicate.call(value)
-			
+
 			if ok:
 				if sig.is_connected(context.conn):
 					sig.disconnect(context.conn)
 				res.call(value)
-		
+
 		sig.connect(context.conn, CONNECT_DEFERRED)
-		
+
 		on_cancel.call(func():
 			if sig.is_connected(context.conn):
 				sig.disconnect(context.conn)
@@ -292,7 +391,10 @@ static func from_signal(sig: Signal, predicate: Callable = Callable()) -> Promis
 ## Core chaining method. Both handlers are optional.
 ## on_success: func(value) -> any   – called when this promise resolves.
 ## on_failure: func(reason) -> any  – called when this promise rejects.
-## Either handler may return a plain value or a Promise.
+## Either handler may return a plain value or a Promise (which is adopted).
+## The returned promise is registered as a CONSUMER of this one: cancelling
+## it propagates upward when it is the last consumer; cancelling this promise
+## propagates downward to it.
 func and_then(on_success: Callable = Callable(),
 		on_failure: Callable = Callable()) -> Promise:
 	_unhandled_rejection = false
@@ -302,10 +404,10 @@ func and_then(on_success: Callable = Callable(),
 		p._status = Status.CANCELLED
 		return p
 
-	return Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
-		var ok_cb:   Callable = _wrap_handler(on_success, res, rej) \
+	var child := Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
+		var ok_cb:   Callable = _wrap_handler(on_success, res) \
 				if on_success.is_valid() else res
-		var fail_cb: Callable = _wrap_handler(on_failure, res, rej) \
+		var fail_cb: Callable = _wrap_handler(on_failure, res) \
 				if on_failure.is_valid() else rej
 
 		match _status:
@@ -321,35 +423,61 @@ func and_then(on_success: Callable = Callable(),
 			Status.REJECTED:
 				fail_cb.call(_value)
 	)
+	if _status == Status.PENDING and child._status == Status.PENDING:
+		child._parent = self
+		_consumers.append(child)
+	return child
 
 ## Shorthand: and_then with only a failure handler.
 func catch(on_failure: Callable) -> Promise:
 	return and_then(Callable(), on_failure)
 
-## Runs `handler(Status)` regardless of outcome.
-## The returned Promise re-resolves/rejects with the original status,
-## unless `handler` itself returns a rejecting Promise.
+## Runs `handler(Status)` regardless of outcome (resolve, reject, or cancel).
+##
+## The returned Promise:
+##   * resolves with the SAME value this promise resolves with,
+##   * rejects with the SAME reason this promise rejects with,
+##   * is cancelled if this promise is cancelled (after the handler runs).
+## The handler's return value is discarded — unless it is a Promise, in which
+## case we wait for it (discarding its value), and if it REJECTS, the returned
+## Promise rejects with that error instead.
+##
+## finally_cb does NOT register as a consumer: it never keeps this promise
+## alive against cancellation. Cancellation still propagates through it in
+## both directions.
 func finally_cb(handler: Callable = Callable()) -> Promise:
 	_unhandled_rejection = false
-	return Promise.new_promise(func(res: Callable, rej: Callable, _oc: Callable):
-		var cb := func(status: Status):
-			if not handler.is_valid():
-				res.call(status)
-				return
-			var r: Variant = handler.call(status)
-			if r is Promise:
-				(r as Promise).and_then(
-					func(_v): res.call(status),
-					func(e):  rej.call(e)
-				)
-			else:
-				res.call(status)
-		match _status:
-			Status.PENDING:
-				_queued_finally.append(cb)
-			_:
-				cb.call(_status)
-	)
+	var child := Promise.new()
+	# Wire for cancel propagation through (not consumption of) this promise.
+	child._parent = self
+
+	var cb := func(status: Status):
+		var finish := func():
+			match status:
+				Status.RESOLVED:
+					child._settle_resolve(_value)
+				Status.REJECTED:
+					child._settle_reject(_value)
+				_:
+					child.cancel()
+		if not handler.is_valid():
+			finish.call()
+			return
+		var r: Variant = handler.call(status)
+		if r is Promise:
+			(r as Promise).and_then(
+				func(_v): finish.call(),
+				func(e):  child._settle_reject(e)
+			)
+		else:
+			finish.call()
+
+	match _status:
+		Status.PENDING:
+			_queued_finally.append(cb)
+		_:
+			cb.call(_status)
+	return child
 
 ## Calls `handler(value)` as a side-effect; passes the original value through.
 ## If `handler` returns a Promise, waits for it before continuing.
@@ -362,6 +490,7 @@ func tap(handler: Callable) -> Promise:
 	)
 
 ## Discards the resolved value and calls `callback` with preset `args`.
+## The next promise resolves with the callback's return value.
 func and_then_call(callback: Callable, args: Array = []) -> Promise:
 	return and_then(func(_v): return callback.callv(args))
 
@@ -370,15 +499,23 @@ func and_then_return(value: Variant) -> Promise:
 	return and_then(func(_v): return value)
 
 ## Like and_then_call but uses finally_cb (runs on resolve, reject, or cancel).
+## NOTE: the callback's return value is DISCARDED — the
+## returned promise passes this promise's outcome through unchanged, unless
+## the callback returns a rejecting Promise.
 func finally_call(callback: Callable, args: Array = []) -> Promise:
 	return finally_cb(func(_s): return callback.callv(args))
 
-## Like and_then_return but uses finally_cb.
+## Sugar for finally_cb(func(_s): return value).
+## NOTE: since finally discards handler return values,
+## `value` never reaches the chain — the original outcome passes through.
+## Kept for API parity; prefer and_then_return to inject a value.
 func finally_return(value: Variant) -> Promise:
 	return finally_cb(func(_s): return value)
 
 ## Rejects with a TIMED_OUT PromiseError if not resolved within `seconds`.
 ## Pass `rejection_value` to use a custom rejection reason instead.
+## NOTE: if the timeout is reached, this promise is CANCELLED
+## (when it has no other consumers).
 func timeout(seconds: float, rejection_value: Variant = null) -> Promise:
 	var reason: Variant = rejection_value if rejection_value != null else \
 		PromiseError.new("Timed out after %s seconds" % seconds, PromiseError.Kind.TIMED_OUT)
@@ -397,7 +534,10 @@ func now(rejection_value: Variant = null) -> Promise:
 				PromiseError.Kind.NOT_RESOLVED_IN_TIME)
 	return Promise.reject(reason)
 
-## Cancels this promise. Propagates upward (parent) and downward (consumers).
+## Cancels this promise, preventing it from resolving or rejecting.
+## No-op if already settled.
+## Propagates DOWNWARD to all pending consumers, and UPWARD to the parent
+## (which cancels itself only once it has no remaining consumers).
 func cancel() -> void:
 	if _status != Status.PENDING:
 		return
@@ -417,6 +557,8 @@ func get_status() -> Status:
 ## Waits until the promise settles, then returns [Status, value].
 ## Call with `await` inside an async func:
 ##   var arr = await my_promise.await_status()
+## NOTE: awaiting does not register a consumer; the promise can still be
+## cancelled while awaited (the awaiter resumes with Status.CANCELLED).
 func await_status() -> Array:
 	_unhandled_rejection = false
 	if _status == Status.PENDING:
@@ -439,7 +581,7 @@ func await_resolved() -> bool:
 ## Asserts that the Promise resolves. push_error is called if rejected or cancelled.
 ## Can be called without await — runs as a background coroutine and returns the
 ## resolved value if awaited, or null when called fire-and-forget.
-##   promise.expect()              # fire-and-forget: errors on rejection
+##   promise.expect()               # fire-and-forget: errors on rejection
 ##   var v = await promise.expect() # yields until settled, returns value
 func expect() -> Variant:
 	_unhandled_rejection = false
@@ -470,50 +612,49 @@ func _run_executor(executor: Callable) -> void:
 
 	# --- FLEXIBLE CALL LOGIC ---
 	var args = [res, rej, on_cancel]
-	# Only pass the number of arguments the lambda actually asks for
+	# Only pass the number of arguments the lambda actually asks for.
 	var count = executor.get_argument_count()
-	
 	# If count is -1, it's a built-in or variadic, so we pass all.
-	# Otherwise, we slice the array to match the user's signature.
 	var final_args = args if count < 0 else args.slice(0, count)
-	
 	var result: Variant = executor.callv(final_args)
 	# ---------------------------
 
+	# An executor returning a Promise chains onto it (no-op if the executor
+	# already settled this promise via res/rej).
 	if result is Promise:
-		(result as Promise).and_then(
-			func(v): _settle_resolve(v),
-			func(r): _settle_reject(r)
-		)
+		_settle_resolve(result)
 
-## Wraps a user handler so its return value feeds the next promise in the chain.
-func _wrap_handler(handler: Callable, res: Callable, rej: Callable) -> Callable:
+## Wraps a user handler so its return value feeds the next promise in the
+## chain. Promise return values are adopted by _settle_resolve, which also
+## wires cancellation through to them.
+func _wrap_handler(handler: Callable, res: Callable) -> Callable:
 	return func(value: Variant):
-		# Check if the handler wants the value or not
+		# Check whether the handler wants the value or not.
 		var count = handler.get_argument_count()
-		var r: Variant
-		if count == 0:
-			r = handler.call()
-		else:
-			r = handler.call(value)
-			
-		if r is Promise:
-			(r as Promise).and_then(
-				func(v): res.call(v),
-				func(e): rej.call(e)
-			)
-		else:
-			res.call(r)
+		var r: Variant = handler.call() if count == 0 else handler.call(value)
+		res.call(r)
 
 func _settle_resolve(value: Variant) -> void:
 	if _status != Status.PENDING:
 		return
 	# If resolving with another Promise, chain onto it instead of settling now.
 	if value is Promise:
-		(value as Promise).and_then(
+		if value == self:
+			# Self-resolution would await its own settlement forever.
+			# (JS rejects with a TypeError here; we reject with a PromiseError.)
+			_settle_reject(PromiseError.new(
+				"Cannot resolve a Promise with itself",
+				PromiseError.Kind.EXECUTION_ERROR))
+			return
+		var bridge := (value as Promise).and_then(
 			func(v): _settle_resolve(v),
 			func(r): _settle_reject(r)
 		)
+		# Wire cancellation: cancelling this promise propagates through the
+		# bridge to the adopted promise (if it has no other consumers).
+		if bridge._status == Status.PENDING:
+			_parent = bridge
+			bridge._consumers.append(self)
 		return
 	_status = Status.RESOLVED
 	_value  = value
@@ -542,8 +683,17 @@ func _finalize() -> void:
 	_queued_resolve.clear()
 	_queued_reject.clear()
 	_queued_finally.clear()
+	# Sever propagation links: breaks the parent<->child reference cycle the
+	# moment it is no longer needed.
+	_consumers.clear()
+	_parent = null
 	emit_signal("_settled")
 
+## Called by a (former) consumer when it is cancelled. Once the last consumer
+## is gone, this promise cancels itself (upward propagation).
+## Note: finally children are never IN _consumers, so a lone cancelled finally
+## child finds the list empty and cancels this promise — exactly the
+## "can cancel its parent if it had no other consumers" rule.
 func _consumer_cancelled(consumer: Promise) -> void:
 	if _status != Status.PENDING:
 		return
