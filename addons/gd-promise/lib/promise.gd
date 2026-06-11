@@ -36,6 +36,7 @@
 #       resolve.call("hello"))
 #   p.and_then(func(v): print(v))   # prints "hello"
 
+## Promise class for robust asynchronous state management.
 class_name Promise
 extends RefCounted
 
@@ -570,6 +571,8 @@ func await_result() -> Array:
 	var s: Array = await await_status()
 	return [s[0] == Status.RESOLVED, s[1]]
 
+
+## Simply returns true when or if the Promise is resolved, and false otherwise.
 func await_resolved() -> bool:
 	_unhandled_rejection = false
 	if _status == Status.PENDING:
