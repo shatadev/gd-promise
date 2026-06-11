@@ -254,10 +254,19 @@ Run them with [GUT 9](https://github.com/bitwes/Gut) pointed at
 ## Alternatives
 [GodotPromise](https://github.com/SoulsTogetherX/GodotPromise)
 
+## AI Disclosure
+Yes, some artificial intelligence was used in the creation of this addon. An LLM was used to generate:
+- Gut tests
+- Example scripts
+- Documentation and README
+
+
+**The complete Promise class was designed and implemented by humans**
+
 ## Credits
 
-Design and semantics ported from
+Design ported from
 [evaera/roblox-lua-promise](https://github.com/evaera/roblox-lua-promise), adapted to
-GDScript's single-value Callables, signals, and lack of exception handling.
+GDScript's single-value Callables, signals, and (lack of) exception handling.
 
 See [LICENSE](LICENSE).
