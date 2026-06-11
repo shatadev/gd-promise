@@ -10,6 +10,15 @@ faithfully ported from
   <a href="https://github.com/evaera/roblox-lua-promise">evaera's roblox-lua-promise</a>.
 </p>
 
+<p align="center">
+  <a href="https://godotengine.org">
+    <img src="https://img.shields.io/badge/Godot-4.3%2B-478cbf?style=flat-square&logo=godot-engine&logoColor=white" alt="Godot 4.3+">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT">
+  </a>
+</p>  
+
 ## Who is this for?
 - Those wanting a cleaner way to manage asynchronous blocks
 - Roblox developers used to the Promise library
@@ -37,12 +46,19 @@ Plus the things bare `await` can't do: combinators (`all`, `any`, `some`,
 ## Requirements
 
 - **Godot 4.3+** (Godot 3 support being explored)
+- **GDScript**
 
 ## Installation
+### 1. AssetLib (Recommended)
+Visit the Asset Library from within the engine and search `gd-promise` or download directly: https://godotengine.org/asset-library/asset/5246
+
+### 2. Release Download
+
+Download latest [release](https://github.com/shatadev/gd-promise/releases).
 
 Copy `addons/gd-promise/` into your project's `addons/` folder.
 
-To verify your install, run `promise_example.tscn` or `promise_interactive_example.tscn`
+To verify your install, run `examples/promise_example.tscn` or `examples/promise_interactive_example.tscn`
 
 ## Quick start
 
@@ -248,15 +264,15 @@ intentionally left `pending` — they document behaviors GUT cannot assert on
 above.
 
 Run them with [GUT 9](https://github.com/bitwes/Gut) pointed at
-`res://addons/gd-promise/test/unit/`.
+`res://test/unit/` (or wherever you've placed the test files in your project).
 
 ## Alternatives
 [GodotPromise](https://github.com/SoulsTogetherX/GodotPromise) by SoulsTogetherX
 
 [godot-promise](https://github.com/TheWalruzz/godot-promise) by TheWalruzz
 
-## AI Disclosure
-Yes, some artificial intelligence was used in the creation of this addon. An LLM was used to generate:
+## LLM Disclosure
+An LLM was used to generate:
 - Gut tests
 - Example scripts
 - Documentation and README
