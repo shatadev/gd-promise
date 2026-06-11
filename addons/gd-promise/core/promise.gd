@@ -52,16 +52,16 @@ enum Status {
 # ---------------------------------------------------------------------------
 # Internal state
 # ---------------------------------------------------------------------------
-var _status             : Status   = Status.PENDING
-var _value              : Variant  = null   # single resolved value OR rejection reason
-var _queued_resolve     : Array    = []     # Array[Callable(value)]
-var _queued_reject      : Array    = []     # Array[Callable(reason)]
-var _queued_finally     : Array    = []     # Array[Callable(Status)]
-var _cancellation_hook  : Callable          # called if/when cancelled
-var _parent             : Promise  = null   # upstream (for cancel propagation)
-var _consumers          : Array    = []     # downstream and_then children (NOT finally)
-var _unhandled_rejection: bool     = true
-signal _settled                             # emitted once when status leaves PENDING
+var _status: Status = Status.PENDING
+var _value: Variant = null # single resolved value OR rejection reason
+var _queued_resolve: Array = [] # Array[Callable(value)]
+var _queued_reject: Array = [] # Array[Callable(reason)]
+var _queued_finally: Array = [] # Array[Callable(Status)]
+var _cancellation_hook: Callable # called if/when cancelled
+var _parent: Promise = null # upstream (for cancel propagation)
+var _consumers: Array = [] # downstream and_then children (NOT finally)
+var _unhandled_rejection: bool = true
+signal _settled # emitted once when status leaves PENDING
 
 # ---------------------------------------------------------------------------
 # Static constructors
@@ -125,7 +125,7 @@ static func all(promises: Array) -> Promise:
 		var results := []
 		results.resize(promises.size())
 		var count := [0]
-		var done  := [false]
+		var done := [false]
 		var children := []
 		var cancel_children := func():
 			for c in children:
@@ -162,10 +162,10 @@ static func some(promises: Array, count: int) -> Promise:
 	if count == 0:
 		return Promise.resolve([])
 	return Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
-		var results  := []
+		var results := []
 		var resolved := [0]
 		var rejected := [0]
-		var done     := [false]
+		var done := [false]
 		var children := []
 		var cancel_children := func():
 			for c in children:
@@ -241,7 +241,7 @@ static func all_settled(promises: Array) -> Promise:
 			var idx := i
 			var f := (promises[idx] as Promise).finally_cb(func(status: Status):
 				fates[idx] = status
-				count[0]  += 1
+				count[0] += 1
 				if count[0] >= promises.size():
 					res.call(fates)
 			)
@@ -267,7 +267,7 @@ static func each(list: Array, predicate: Callable) -> Promise:
 	return Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
 		var results := []
 		results.resize(list.size())
-		var state := { "cancelled": false, "active": null }
+		var state := {"cancelled": false, "active": null}
 		on_cancel.call(func():
 			state.cancelled = true
 			if state.active != null:
@@ -320,7 +320,7 @@ static func _each_step(list: Array, predicate: Callable, results: Array,
 static func fold(list: Array, reducer: Callable, initial_value: Variant) -> Promise:
 	var acc := Promise.resolve(initial_value)
 	for i in list.size():
-		var idx   := i
+		var idx := i
 		var value: Variant = list[idx]
 		acc = acc.and_then(func(prev):
 			if value is Promise:
@@ -353,7 +353,7 @@ static func retry_with_delay(callback: Callable, times: int,
 ## itself cannot be aborted, but the settle is ignored once cancelled).
 static func delay(seconds: float) -> Promise:
 	return Promise.new_promise(func(res: Callable, _rej: Callable, _on_cancel: Callable):
-		var tree  := Engine.get_main_loop() as SceneTree
+		var tree := Engine.get_main_loop() as SceneTree
 		var timer := tree.create_timer(seconds)
 		timer.timeout.connect(func(): res.call(seconds), CONNECT_ONE_SHOT)
 	)
@@ -364,7 +364,7 @@ static func from_signal(sig: Signal, predicate: Callable = Callable()) -> Promis
 	return Promise.new_promise(func(res: Callable, _rej: Callable, on_cancel: Callable):
 		# A helper dictionary holds the Callable reference, bypassing the
 		# "capture before assignment" issue.
-		var context := { "conn": Callable() }
+		var context := {"conn": Callable()}
 
 		context.conn = func(value: Variant = null):
 			var ok := true
@@ -405,7 +405,7 @@ func and_then(on_success: Callable = Callable(),
 		return p
 
 	var child := Promise.new_promise(func(res: Callable, rej: Callable, on_cancel: Callable):
-		var ok_cb:   Callable = _wrap_handler(on_success, res) \
+		var ok_cb: Callable = _wrap_handler(on_success, res) \
 				if on_success.is_valid() else res
 		var fail_cb: Callable = _wrap_handler(on_failure, res) \
 				if on_failure.is_valid() else rej
@@ -467,7 +467,7 @@ func finally_cb(handler: Callable = Callable()) -> Promise:
 		if r is Promise:
 			(r as Promise).and_then(
 				func(_v): finish.call(),
-				func(e):  child._settle_reject(e)
+				func(e): child._settle_reject(e)
 			)
 		else:
 			finish.call()
@@ -545,7 +545,7 @@ func cancel() -> void:
 	if _cancellation_hook.is_valid():
 		_cancellation_hook.call()
 	if _parent != null:
-		_parent._consumer_cancelled(self)
+		_parent._consumer_cancelled(self )
 	for child: Promise in _consumers.duplicate():
 		(child as Promise).cancel()
 	_finalize()
@@ -654,10 +654,10 @@ func _settle_resolve(value: Variant) -> void:
 		# bridge to the adopted promise (if it has no other consumers).
 		if bridge._status == Status.PENDING:
 			_parent = bridge
-			bridge._consumers.append(self)
+			bridge._consumers.append(self )
 		return
 	_status = Status.RESOLVED
-	_value  = value
+	_value = value
 	for cb: Callable in _queued_resolve.duplicate():
 		cb.call(_value)
 	_finalize()
@@ -666,7 +666,7 @@ func _settle_reject(reason: Variant) -> void:
 	if _status != Status.PENDING:
 		return
 	_status = Status.REJECTED
-	_value  = reason
+	_value = reason
 	if _queued_reject.size() > 0:
 		for cb: Callable in _queued_reject.duplicate():
 			cb.call(_value)

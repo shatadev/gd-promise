@@ -39,7 +39,7 @@ func _deferred() -> Dictionary:
 	var d := {}
 	d["promise"] = Promise.new_promise(func(res, rej):
 		d["resolve"] = res
-		d["reject"]  = rej
+		d["reject"] = rej
 	)
 	return d
  
@@ -106,7 +106,7 @@ func test_cancelling_from_inside_finally_on_rejection() -> void:
 	var d1 := _deferred()
 	var d2 := _deferred()
 	var f: Promise = d1.promise.finally_cb(func(_s): d2.promise.cancel())
-	f.catch(func(_r): pass)  # finally re-rejects with the parent's reason now
+	f.catch(func(_r): pass ) # finally re-rejects with the parent's reason now
 	d1.reject.call("e")
 	assert_eq(d1.promise.get_status(), Promise.Status.REJECTED)
 	assert_eq(d2.promise.get_status(), Promise.Status.CANCELLED)
@@ -195,12 +195,12 @@ func test_resolving_with_promise_that_later_rejects() -> void:
 	var outer := _deferred()
 	var inner := _deferred()
 	outer.resolve.call(inner.promise)
-	outer.promise.catch(func(_r): pass)  # mark handled
+	outer.promise.catch(func(_r): pass ) # mark handled
 	inner.reject.call("adopted-failure")
 	assert_eq(outer.promise.get_status(), Promise.Status.REJECTED)
 	var r: Array = await outer.promise.await_status()
 	assert_eq(r[1], "adopted-failure")
-	inner.promise.catch(func(_r): pass)  # inner itself also rejected; mark handled
+	inner.promise.catch(func(_r): pass ) # inner itself also rejected; mark handled
  
  
 func test_promise_resolved_with_itself_rejects() -> void:
@@ -311,7 +311,7 @@ func test_from_signal_multi_arg_signal_hazard() -> void:
 # ---------------------------------------------------------------------------
  
 func test_from_signal_stays_pending_after_emitter_freed() -> void:
-	var e := NodeEmitter.new()  # Node: signals work without being in the tree
+	var e := NodeEmitter.new() # Node: signals work without being in the tree
 	var p := Promise.from_signal(e.fired)
 	assert_eq(e.fired.get_connections().size(), 1)
 	e.free()
@@ -416,7 +416,7 @@ func test_cancelling_finally_child_can_cancel_parent() -> void:
 	# Cancellation still propagates THROUGH finally: cancelling the finally
 	# promise cancels the parent when the parent has no other consumers.
 	var d := _deferred()
-	var f: Promise = d.promise.finally_cb(func(_s): pass)
+	var f: Promise = d.promise.finally_cb(func(_s): pass )
 	f.cancel()
 	assert_eq(f.get_status(), Promise.Status.CANCELLED)
 	assert_eq(d.promise.get_status(), Promise.Status.CANCELLED)
@@ -424,7 +424,7 @@ func test_cancelling_finally_child_can_cancel_parent() -> void:
  
 func test_cancelling_finally_child_spares_parent_with_consumers() -> void:
 	var d := _deferred()
-	var f: Promise = d.promise.finally_cb(func(_s): pass)
+	var f: Promise = d.promise.finally_cb(func(_s): pass )
 	var keep: Promise = d.promise.and_then(func(v): return v)
 	f.cancel()
 	assert_eq(d.promise.get_status(), Promise.Status.PENDING,
@@ -448,7 +448,7 @@ func test_adopted_promise_cancelled_through_adopter() -> void:
 func test_race_spares_losers_with_external_consumers() -> void:
 	var d1 := _deferred()
 	var d2 := _deferred()
-	var keep: Promise = d2.promise.and_then(func(v): return v)  # external consumer
+	var keep: Promise = d2.promise.and_then(func(v): return v) # external consumer
 	var p := Promise.race([d1.promise, d2.promise, Promise.resolve("win")])
 	var r: Array = await p.await_status()
 	assert_eq(r[1], "win")
@@ -521,4 +521,3 @@ func test_each_cancel_stops_iteration_and_cancels_active() -> void:
 	await wait_seconds(0.2)
 	assert_eq(p.get_status(), Promise.Status.CANCELLED)
 	assert_eq(seen, [1], "iteration stopped after the active element")
- 

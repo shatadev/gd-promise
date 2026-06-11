@@ -30,7 +30,7 @@ func _deferred() -> Dictionary:
 	var d := {}
 	d["promise"] = Promise.new_promise(func(res, rej):
 		d["resolve"] = res
-		d["reject"]  = rej
+		d["reject"] = rej
 	)
 	return d
 
@@ -107,7 +107,7 @@ func test_resolving_with_a_rejected_promise_adopts_its_rejection() -> void:
 func test_settle_is_idempotent() -> void:
 	var d := _deferred()
 	d.resolve.call(1)
-	d.resolve.call(2)        # ignored
+	d.resolve.call(2) # ignored
 	d.reject.call("ignored") # ignored
 	var r: Array = await d.promise.await_status()
 	assert_eq(r[0], Promise.Status.RESOLVED)
@@ -275,7 +275,7 @@ func test_finally_queued_until_settled() -> void:
 	var d := _deferred()
 	var got := [-1]
 	var f: Promise = d.promise.finally_cb(func(s): got[0] = s)
-	f.catch(func(_r): pass)  # finally now re-rejects with the parent's reason
+	f.catch(func(_r): pass ) # finally now re-rejects with the parent's reason
 	assert_eq(got[0], -1)
 	d.reject.call("later")
 	assert_eq(got[0], Promise.Status.REJECTED)
@@ -400,7 +400,7 @@ func test_now_on_pending_promise_rejects() -> void:
 	var r: Array = await d.promise.now().await_status()
 	assert_eq(r[0], Promise.Status.REJECTED)
 	assert_true(PromiseError.is_kind(r[1], PromiseError.Kind.NOT_RESOLVED_IN_TIME))
-	d.promise.cancel()  # tidy up
+	d.promise.cancel() # tidy up
 
 
 func test_now_with_custom_rejection_value() -> void:
@@ -430,7 +430,7 @@ func test_cancel_on_settled_promise_is_noop() -> void:
 	assert_eq(p.get_status(), Promise.Status.RESOLVED)
 
 	var q := Promise.reject("e")
-	q.catch(func(_r): pass)  # mark handled
+	q.catch(func(_r): pass ) # mark handled
 	q.cancel()
 	assert_eq(q.get_status(), Promise.Status.REJECTED)
 
@@ -466,7 +466,7 @@ func test_cancelling_only_child_cancels_parent_upward() -> void:
 	child.cancel()
 	assert_eq(child.get_status(), Promise.Status.CANCELLED)
 	assert_eq(d.promise.get_status(), Promise.Status.CANCELLED)
-	d.resolve.call(1)  # ignored
+	d.resolve.call(1) # ignored
 	assert_eq(d.promise.get_status(), Promise.Status.CANCELLED)
 
 
@@ -490,7 +490,7 @@ func test_cancel_delay_prevents_resolution() -> void:
 	var p := Promise.delay(0.05)
 	p.cancel()
 	assert_eq(p.get_status(), Promise.Status.CANCELLED)
-	await wait_seconds(0.1)  # let the internal timer fire anyway
+	await wait_seconds(0.1) # let the internal timer fire anyway
 	assert_eq(p.get_status(), Promise.Status.CANCELLED)
 
 
@@ -563,7 +563,7 @@ func test_all_resolves_with_ordered_values() -> void:
 	var d1 := _deferred()
 	var d2 := _deferred()
 	var p := Promise.all([d1.promise, d2.promise, Promise.resolve("c")])
-	d2.resolve.call("b")  # settle out of order on purpose
+	d2.resolve.call("b") # settle out of order on purpose
 	d1.resolve.call("a")
 	var r: Array = await p.await_status()
 	assert_eq(r[0], Promise.Status.RESOLVED)
@@ -599,7 +599,7 @@ func test_some_resolves_with_first_n_values() -> void:
 	d1.resolve.call("first")
 	var r: Array = await p.await_status()
 	assert_eq(r[0], Promise.Status.RESOLVED)
-	assert_eq(r[1], ["third", "first"])  # arrival order
+	assert_eq(r[1], ["third", "first"]) # arrival order
 	assert_eq(d2.promise.get_status(), Promise.Status.CANCELLED,
 		"remaining input with no other consumers is auto-cancelled")
 
@@ -609,9 +609,9 @@ func test_some_rejects_when_count_becomes_impossible() -> void:
 	var d2 := _deferred()
 	var d3 := _deferred()
 	var p := Promise.some([d1.promise, d2.promise, d3.promise], 2)
-	d1.reject.call("e1")  # 2 remaining, still possible
+	d1.reject.call("e1") # 2 remaining, still possible
 	assert_eq(p.get_status(), Promise.Status.PENDING)
-	d2.reject.call("e2")  # 1 remaining < 2 -> impossible
+	d2.reject.call("e2") # 1 remaining < 2 -> impossible
 	var r: Array = await p.await_status()
 	assert_eq(r[0], Promise.Status.REJECTED)
 	assert_eq(r[1], "e2")
@@ -630,7 +630,7 @@ func test_any_rejects_when_all_reject() -> void:
 	var p := Promise.any([Promise.reject("a"), Promise.reject("b")])
 	var r: Array = await p.await_status()
 	assert_eq(r[0], Promise.Status.REJECTED)
-	assert_eq(r[1], "b")  # the rejection that made success impossible
+	assert_eq(r[1], "b") # the rejection that made success impossible
 
 
 func test_race_resolves_with_first_settler() -> void:
@@ -643,7 +643,7 @@ func test_race_resolves_with_first_settler() -> void:
 	assert_eq(r[1], "winner")
 	assert_eq(d1.promise.get_status(), Promise.Status.CANCELLED,
 		"loser with no other consumers is auto-cancelled")
-	d1.resolve.call("loser")  # ignored: already cancelled
+	d1.resolve.call("loser") # ignored: already cancelled
 	assert_eq(d1.promise.get_status(), Promise.Status.CANCELLED)
 
 
@@ -764,7 +764,7 @@ func test_retry_rejects_after_exhausting_attempts() -> void:
 		return Promise.reject("fail-%d" % attempts[0])
 	var r: Array = await Promise.retry(always_fail, 2).await_status()
 	assert_eq(r[0], Promise.Status.REJECTED)
-	assert_eq(r[1], "fail-3")  # 1 initial + 2 retries
+	assert_eq(r[1], "fail-3") # 1 initial + 2 retries
 	assert_eq(attempts[0], 3)
 
 
@@ -800,7 +800,7 @@ func test_from_signal_resolves_on_emission() -> void:
 	var e := Emitter.new()
 	var p := Promise.from_signal(e.fired)
 	e.fired.emit("hello")
-	await wait_process_frames(3)  # connection is CONNECT_DEFERRED (flushed on process frames)
+	await wait_process_frames(3) # connection is CONNECT_DEFERRED (flushed on process frames)
 	assert_eq(p.get_status(), Promise.Status.RESOLVED)
 	var r: Array = await p.await_status()
 	assert_eq(r[1], "hello")
@@ -853,7 +853,7 @@ func test_get_status_transitions() -> void:
 	assert_eq(d.promise.get_status(), Promise.Status.RESOLVED)
 
 	var d2 := _deferred()
-	d2.promise.catch(func(_r): pass)  # mark handled
+	d2.promise.catch(func(_r): pass ) # mark handled
 	d2.reject.call("e")
 	assert_eq(d2.promise.get_status(), Promise.Status.REJECTED)
 
