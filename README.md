@@ -269,4 +269,6 @@ Design ported from
 [evaera/roblox-lua-promise](https://github.com/evaera/roblox-lua-promise), adapted to
 GDScript's single-value Callables, signals, and (lack of) exception handling.
 
+Javascript Promises A+ [https://github.com/promises-aplus](https://github.com/promises-aplus)
+
 See [LICENSE](LICENSE).
