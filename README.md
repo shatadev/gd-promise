@@ -252,7 +252,9 @@ Run them with [GUT 9](https://github.com/bitwes/Gut) pointed at
 `res://addons/gd-promise/test/unit/`.
 
 ## Alternatives
-[GodotPromise](https://github.com/SoulsTogetherX/GodotPromise)
+[GodotPromise](https://github.com/SoulsTogetherX/GodotPromise) by SoulsTogetherX
+
+[godot-promise](https://github.com/TheWalruzz/godot-promise) by TheWalruzz
 
 ## AI Disclosure
 Yes, some artificial intelligence was used in the creation of this addon. An LLM was used to generate:
