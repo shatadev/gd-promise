@@ -12,12 +12,9 @@ faithfully ported from
 
 <p align="center">
   <a href="https://godotengine.org">
-    <img src="https://img.shields.io/badge/Godot-4.3%2B-478cbf?style=flat-square&logo=godot-engine&logoColor=white" alt="Godot 4.3+">
-  </a>
-  <a href="https://opensource.org/licenses/MIT">
-    <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT">
-  </a>
-</p>  
+    <img src="https://img.shields.io/badge/Godot-4.3%2B-478cbf?style=flat-square&logo=godot-engine&logoColor=white" alt="Godot 4.3+"></a><a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
+</p>
 
 ## Who is this for?
 - Those wanting a cleaner way to manage asynchronous blocks
